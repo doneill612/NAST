@@ -46,8 +46,9 @@ def split_attn_heads(
         for tensor in tensors
     )
 
-def positional_encoding_table(sequence_length: int, embed_dim: int) -> FloatTensor:    
-    positions = list(range(sequence_length))
+def positional_encoding_table(sequence_length: Union[int, FloatTensor], embed_dim: int) -> FloatTensor: 
+    if isinstance(sequence_length, int):  
+        positions = list(range(sequence_length))
     def cal_angle(position, hid_idx):
         return position / np.power(1000.0, 2 * (hid_idx // 2) / embed_dim)
 
@@ -93,7 +94,7 @@ class MultiheadAttention(nn.Module):
         num_heads, 
         embed_dim, 
         attn_dropout=0.0, 
-        embed_dropout=0.0,
+        ff_dropout=0.0,
         bias=True
     ):
         super(MultiheadAttention, self).__init__()
@@ -101,7 +102,7 @@ class MultiheadAttention(nn.Module):
         self.embed_dim = embed_dim
         self.head_dim = embed_dim // num_heads
         self.attn_dropout = attn_dropout
-        self.embed_dropout = embed_dropout
+        self.ff_dropout = ff_dropout
         
         self.query_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.key_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
@@ -147,7 +148,7 @@ class MultiheadAttention(nn.Module):
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
         
         out = self.fc(out)
-        out = functional.dropout(out, p=self.embed_dropout, training=self.training)
+        out = functional.dropout(out, p=self.ff_dropout, training=self.training)
         out += residual
         out = self.layer_norm(out)
 

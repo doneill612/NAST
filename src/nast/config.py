@@ -3,6 +3,10 @@ from dataclasses import dataclass
 @dataclass
 class NastTransformerConfig:
 
+    context_length: int
+    prediction_length: int
+    channels: int
+
     encoder_blocks: int = 2
     decoder_blocks: int = 2
     
