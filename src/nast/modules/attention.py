@@ -5,46 +5,8 @@ import torch.nn as nn
 from torch import FloatTensor
 from torch.nn import functional
 
-from typing import Optional, Union, Tuple 
+from typing import Optional, Union, Tuple
 
-
-def split_attn_heads(
-    batch_size: int, 
-    sequence_length:int, 
-    num_heads: int,
-    head_dim: int,
-    *tensors: Union[FloatTensor, Tuple[FloatTensor]]
-) -> Union[FloatTensor, Tuple[FloatTensor]]:
-    """Reshapes supplied tensors (typically query, key, and value state tensors) for consumption 
-    by a `ScaledDotProductAttention` module.
-
-    The input tensors are assumed to have shape (batch_size, sequence_length, embed_dim).
-
-    Args:
-        `batch_size` (`int`)
-            Batch size, dim=0 for the input tensors.
-        `sequence_length` (`int`)
-            Length of input sequences, dim=1 for tensors
-        `num_heads` (`int`)
-            The number of attention heads. Typically an instance parameter
-            of the `MultiHeadAttention` module.
-        `head_dim` (`int`)
-            Equivalent to `embed_dim // num_heads`, also a property of 
-            a `MultiheadAttention` module.
-    Returns:
-        a new set of reshaped tensors with shape (batch_size, num_heads, sequence_length, head_dim)
-    """
-    if isinstance(tensors, FloatTensor):
-        tensors = (tensors,)
-    return (
-        tensor.view(
-            batch_size,
-            sequence_length,
-            num_heads,
-            head_dim
-        ).transpose(1, 2).contiguous()
-        for tensor in tensors
-    )
 
 def positional_encoding_table(sequence_length: Union[int, FloatTensor], embed_dim: int) -> FloatTensor: 
     if isinstance(sequence_length, int):  
@@ -86,6 +48,7 @@ class ScaledDotProductAttention(nn.Module):
         
         out = torch.matmul(attn, values)
         return out, attn
+
     
 class MultiheadAttention(nn.Module):
 
@@ -116,40 +79,50 @@ class MultiheadAttention(nn.Module):
         self,
         hidden_states: FloatTensor,
         key_value_states: Optional[Tuple[FloatTensor]]=None,
-        attention_mask: Optional[FloatTensor]=None
+        attention_mask: Optional[FloatTensor]=None,
+        axis: str='time'
     ):
-        batch_size, seq_len = hidden_states.size(0), hidden_states.size(1)
+        batch_size, seq_len, channels, embed_dim = hidden_states.size()
         is_cross_attention = key_value_states is not None
-
         residual = hidden_states
+
+        # sptial attention, collapse timesteps into batch dimension and attend 
+        # to all timeseries channels
+        if axis == 'space':
+            hidden_states = hidden_states.view(-1, channels, embed_dim)
 
         queries = self.query_proj(hidden_states)
         if is_cross_attention:
+            ks, vs = key_value_states
+            if axis == 'space':
+                # spatial attention, same as above, attend to channels
+                ks = ks.view(-1, channels, embed_dim)
+                vs = vs.view(-1, channels, embed_dim)
             keys = self.key_proj(key_value_states[0])
             values = self.value_proj(key_value_states[1])
         else:
             keys = self.key_proj(hidden_states)
             values = self.value_proj(hidden_states)
         
-        queries, keys, values = split_attn_heads(
-            batch_size, 
-            seq_len, 
-            self.num_heads, 
-            self.head_dim, 
-            queries, 
-            keys, 
-            values
-        )
+        # split to each attention head
+        queries = queries.view(-1, self.num_heads, seq_len, self.head_dim)
+        keys = keys.view(-1, self.num_heads, seq_len, self.head_dim)
+        values = values.view(-1, self.num_heads, seq_len, self.head_dim)
 
         if attention_mask is not None:
             attention_mask = attention_mask.unsqueeze(1)
 
         out, attn = self.attn_proj(queries, keys, values, mask=attention_mask)
-        out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
         
+        # reshape
+        out = out.view(batch_size, seq_len, channels, embed_dim)        
+        
+        # fc + residual
         out = self.fc(out)
         out = functional.dropout(out, p=self.ff_dropout, training=self.training)
         out += residual
+
+        # layer norm
         out = self.layer_norm(out)
 
         return out, attn
