@@ -24,23 +24,20 @@ class QueryGenerationBlock(nn.Module):
         self.history_proj = nn.Linear(self.embedding_dim, 1, bias=bias)
         self.pos_proj = nn.Linear(self.embedding_dim, 1, bias=bias)
         
-    def forward(self, encoder_outputs: FloatTensor) -> FloatTensor:
-        # shape(encoder_outputs) = (batch_size, seq_len, channels, embed_dim)
+    def forward(self, encoder_outputs: FloatTensor, return_encoder_outputs: bool=True) -> FloatTensor:
+        # shape(encoder_outputs) = (batch_size, channels, seq_len, embed_dim)
         history_scores = self.history_proj(encoder_outputs)
         history_scores = torch.relu(history_scores)
         
-        positions = torch.arange(0, self.prediction_length, dtype=torch.logn).to(encoder_outputs.device)
+        positions = torch.arange(0, self.prediction_length, dtype=torch.long).to(encoder_outputs.device)
         position_encoding = self.pos_embed(positions)
-        position_scores = self.pos_proj(position_encoding)
+        position_scores = self.pos_proj(position_encoding).transpose(0, 1).contiguous()
         position_scores = torch.relu(position_scores)
-        
-        # Compute dot product of H(n) and P(n) to get weights for each object at each timestep
-        weights = torch.bmm(history_scores.permute(0, 1, 3, 2), position_scores)
-        # weights: tensor of shape (batch_size, num_objects, 1, prediction_length)
 
-        # Apply the weights to the encoder_outputs to obtain the queries
-        queries = torch.bmm(weights, encoder_outputs)
-        # Reshape the queries tensor to remove the extra dimension
-        queries = queries.squeeze(dim=2)
         
+        weights = torch.matmul(history_scores, position_scores)
+        queries = torch.matmul(weights.mT, encoder_outputs)
+
+        if return_encoder_outputs:
+            return queries, encoder_outputs
         return queries
