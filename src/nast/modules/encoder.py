@@ -14,7 +14,6 @@ class SpatialTemporalEncoder(nn.Module):
     def __init__(self, config: NastTransformerConfig):
         super().__init__()    
         self.config = config
-        self.conv_embedding = nn.Conv1d(config.channels, config.embed_dim, kernel_size=1)
         self.layernorm = nn.LayerNorm(config.embed_dim)
         self.blocks = nn.ModuleList([SpatialTemporalEncoderBlock(config) for _ in range(config.encoder_blocks)])
 
