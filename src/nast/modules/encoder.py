@@ -9,12 +9,13 @@ from .attention import MultiheadAttention, positional_encoding_table
 from .mlp import FeedForwardBlock
 from ..config import NastTransformerConfig
 
-class SpatialTemporalEncoder(nn.Module):
+class Encoder(nn.Module):
 
     def __init__(self, config: NastTransformerConfig):
         super().__init__()    
         self.config = config
         self.layernorm = nn.LayerNorm(config.embed_dim)
+        self.embed = nn.Linear(config.channels, config.embed_dim)
         self.blocks = nn.ModuleList([SpatialTemporalEncoderBlock(config) for _ in range(config.encoder_blocks)])
 
     def forward(
@@ -22,7 +23,8 @@ class SpatialTemporalEncoder(nn.Module):
         input_sequences: FloatTensor, 
         return_attention: bool=True
     ):
-        hidden_states = input_sequences.unsqueeze(-1).repeat_interleave(self.config.embed_dim, dim=-1)
+        # hidden_states = input_sequences.unsqueeze(-1).repeat_interleave(self.config.embed_dim, dim=-1)
+        hidden_states = self.embed(input_sequences).view(-1, self.config.context_length, self.config.embed_dim)
         hidden_states = functional.dropout(hidden_states, p=self.config.encoder_ff_dropout, training=self.training)
         hidden_states = self.layernorm(hidden_states)
         enc_self_attentions = []
@@ -72,25 +74,16 @@ class SpatialTemporalEncoderBlock(nn.Module):
         
         # add positional encoding to the hidden states for temporal attention 
         # reshape hidden states + pos encoding for consumption by attention module
-        pos_encoded_hidden_states = (hidden_states + positional_encoding).transpose(1, 2).contiguous()
+        pos_encoded_hidden_states = (hidden_states + positional_encoding)#.transpose(1, 2).contiguous()
         # no positional encoding required for spatial attention
         # reshape hidden states for consumption by attention module
-        reshaped_hidden_states = hidden_states.transpose(1, 2).contiguous()
+        # hidden_states = hidden_states.transpose(1, 2).contiguous()
 
-        # calculate temporal and spacial attentions
-        encout, tattn = self.attention(
-            pos_encoded_hidden_states, key_value_states=key_value_states, axis='time'
-        )
-        _, sattn = self.attention(
-            reshaped_hidden_states, key_value_states=key_value_states, axis='space'
-        )
-
-        # create "temporal influence map" from temporal attention weights
-        # spacial attention weights @ temporal influence map => spatial-temporal attention
-        attn_st = torch.matmul(sattn, tattn.transpose(1, 2).contiguous())
-        encout = torch.matmul(
-            attn_st.transpose(1, 2).contiguous(),
-            encout.transpose(1, 2).contiguous()
+        # calculate spatial-temporal attention
+        encout, attn_st = self.attention(
+            hidden_states=hidden_states,
+            pe_hidden_states=pos_encoded_hidden_states,
+            key_value_states=key_value_states
         )
 
         # output shape (batch_size, channels, context_length, embed_dim)

@@ -56,16 +56,14 @@ class ScaledDotProductAttention(nn.Module):
     
 class MultiheadAttention(nn.Module):
     """Multiheaded attention module adapted to perform both spatial and temporal 
-    scaled dot product attention with multiple attention heads. The attention weights are 
-    mean-scaled along the head dimension after computation.
-
-    There are small additions to the forward pass which reshape the input hidden states 
-    accordingly depending on the attention 'axis,' which can be either 'time' or 'space.'
+    scaled dot product attention with multiple attention heads.
+     
+    When this module is used as part of a spatial-temporal self-attention encoder or 
+    decoder block, the attention mechanism is called twice for both spatial and 
+    temporal attention, and the two sets of weights are used to create a temporal influence 
+    map which is applied to the encoder outputs.
     
-    In spatial attention, time steps are consumed into the batch dimension and the attention
-    mechanism is applied across features in the input sequences. In temporal attention (similar 
-    to the canoncial transformer architecture), features are consumed into the batch dimension and
-    the attention mechanism is applied across each timestep.
+    The attention weights are mean-scaled along the head dimension after computation.
     """
     def __init__(
         self, 
@@ -93,70 +91,100 @@ class MultiheadAttention(nn.Module):
     def forward(
         self,
         hidden_states: FloatTensor,
+        pe_hidden_states: Optional[FloatTensor]=None,
         key_value_states: Optional[Tuple[FloatTensor, FloatTensor]]=None,
         attention_mask: Optional[FloatTensor]=None,
-        axis: str='time'
     ):
-        batch_size, seq_len, channels, embed_dim = hidden_states.size()
+        """Forward pass.
+        
+        Args
+        ----
+            `hidden_states` (`FloatTensor`)
+                Input hidden states. If `pe_hidden_states` not supplied,
+                assumed to be a tensor with added positional encoding
+            `pe_hidden_states` (`FloatTensor`, optional)
+                Positionally encoded hidden states. If supplied, 
+                these are treated as the positionally encoded hidden states
+                to be used for temporal attention, and the `hidden_states`
+                arg is considered *not* to be positionally encoded and used
+                for spatial attention
+            `key_value_states` (`Tuple[FloatTensor, FloatTensor]`, optional)
+                If supplied, assumed to be encoder key and value states used in 
+                decoder for cross attention, with `key_value_states[0]` being 
+                the key states and `key_value_states[1]` being the value states
+            `attention_mask` (`FloatTensor`, optional)
+                Optional attention mask to apply in scaled dot product attention
+                mehcanism
+        
+        Returns
+        -------
+            The attention outputs and either canoncial temporal attention weights or 
+            spatial-temporal weights (if `pe_hidden_states` was supplied)
+        """
+        is_spatial_temporal = pe_hidden_states is not None
+        residual = pe_hidden_states if is_spatial_temporal else hidden_states
+        if is_spatial_temporal and tuple(hidden_states.shape) != tuple(pe_hidden_states.shape):
+            raise ValueError(
+                f'Shape mismatch between temporal and spatial hidden states: '
+                f'{hidden_states.shape} != {pe_hidden_states.shape}'
+            )
+        batch_size, seq_len, embed_dim = hidden_states.size()
         is_cross_attention = key_value_states is not None
-        residual = hidden_states
 
-        if axis == 'space':
-            # sptial attention, collapse timesteps into batch dimension and attend 
-            # to each timeseries feature (channel)
-            hidden_states = hidden_states.view(-1, channels, embed_dim)
-        else:
-            # temporal attention, transpose channel and time dimensions,
-            # collapse channels into batch dimension and attend to 
-            # each individual timestep
-            hidden_states = hidden_states.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
-
-        queries: FloatTensor = self.query_proj(hidden_states)
-        if is_cross_attention:
-            ks, vs = key_value_states
-            if axis == 'space':
-                # spatial attention, same as above, attend to channels
-                ks = ks.view(-1, channels, embed_dim)
-                vs = vs.view(-1, channels, embed_dim)
+        def apply_attention(
+            tensor: FloatTensor, 
+            attention_mask: Optional[FloatTensor]=None, 
+        ):
+            queries: FloatTensor = self.query_proj(tensor)
+            if is_cross_attention:
+                ks, vs = key_value_states
+                keys: FloatTensor = self.key_proj(ks)
+                values: FloatTensor = self.value_proj(vs)
             else:
-                # temporal attention, same as above, attend to timesteps
-                ks = ks.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
-                vs = vs.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
-            keys: FloatTensor = self.key_proj(ks)
-            values: FloatTensor = self.value_proj(vs)
+                keys: FloatTensor = self.key_proj(tensor)
+                values: FloatTensor = self.value_proj(tensor)
+            
+            # split to each attention head
+            queries = queries.view(-1, seq_len, self.num_heads, self.head_dim)
+            keys = keys.view(-1, seq_len, self.num_heads, self.head_dim)
+            values = values.view(-1, seq_len, self.num_heads, self.head_dim)
+            
+
+            if attention_mask is not None:
+                attention_mask = attention_mask.unsqueeze(1)
+
+            out, attn = self.attn_proj(
+                queries.transpose(1, 2).contiguous(), 
+                keys.transpose(1, 2).contiguous(), 
+                values.transpose(1, 2).contiguous(), 
+                mask=attention_mask
+            )
+            
+            # reshape, average attention across heads
+            out = out.view(batch_size, seq_len, embed_dim)
+            # attn = attn.view(batch_size, seq_len, self.num_heads, embed_dim)
+            attn = torch.mean(attn, dim=1)
+
+            return out, attn
+
+        if is_spatial_temporal:
+            tout, tattn = apply_attention(pe_hidden_states, attention_mask)
+            _, sattn = apply_attention(hidden_states, attention_mask)
+            # create "temporal influence map" from temporal attention weights
+            # spacial attention weights @ temporal influence map => spatial-temporal attention
+            attn_st = torch.matmul(sattn, tattn)
+            out = torch.matmul(attn_st.mT, tout)
+            out = self.fc(out)
+            out = functional.dropout(out, p=self.ff_dropout, training=self.training)
+            out += residual
+            out = self.layer_norm(out)
+            return out, attn_st
         else:
-            keys: FloatTensor = self.key_proj(hidden_states)
-            values: FloatTensor = self.value_proj(hidden_states)
+            # Only doing canoncial temporal attention
+            out, attn = apply_attention(hidden_states, attention_mask)
+            out = self.fc(out)
+            out = functional.dropout(out, p=self.ff_dropout, training=self.training)
+            out += residual
+            out = self.layer_norm(out)
+            return out, attn
         
-        # split to each attention head
-        if axis == 'time':
-            queries = queries.view(-1, self.num_heads, seq_len, self.head_dim)
-            keys = keys.view(-1, self.num_heads, seq_len, self.head_dim)
-            values = values.view(-1, self.num_heads, seq_len, self.head_dim)
-        else:
-            queries = queries.view(-1, self.num_heads, channels, self.head_dim)
-            keys = keys.view(-1, self.num_heads, channels, self.head_dim)
-            values = values.view(-1, self.num_heads, channels, self.head_dim)
-
-        if attention_mask is not None:
-            attention_mask = attention_mask.unsqueeze(1)
-
-        out, attn = self.attn_proj(queries, keys, values, mask=attention_mask)
-        
-        # reshape, average attention across heads
-        out = out.view(batch_size, seq_len, channels, embed_dim)
-        if axis == 'space':
-            attn = attn.view(batch_size, seq_len, self.num_heads, channels, channels)
-        else:
-            attn = attn.view(batch_size, channels, self.num_heads, seq_len, seq_len)
-        attn = torch.mean(attn, dim=2)
-        
-        # fc + residual
-        out = self.fc(out)
-        out = functional.dropout(out, p=self.ff_dropout, training=self.training)
-        out += residual
-
-        # layer norm
-        out = self.layer_norm(out)
-
-        return out, attn
