@@ -12,7 +12,7 @@ class QueryGenerationBlock(nn.Module):
     """The query generation block as described in Chen et al. 2021.
 
     This block sits between the encoder and decoder blocks of the transformer.
-    It serves the purpose of using the output hidden states of the encoder bock
+    It serves the purpose of using the output hidden states of the encoder block
     to produce queries for the decoder in a single step, allowing the model to 
     perform parallel decoding.
 
