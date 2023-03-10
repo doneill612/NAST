@@ -11,7 +11,7 @@ from nast.modules.attention import (
     MultiheadAttention,
     positional_encoding_table,
 )
-from nast.modules.encoder import SpatialTemporalEncoderBlock
+from nast.modules.encoder import SpatialTemporalEncoderBlock, SpatialTemporalEncoder
 from nast.config import NastTransformerConfig
 
 @pytest.fixture
@@ -58,6 +58,10 @@ def test_positional_encoding_table(config, input_sequences, batch_size):
 
 def test_encoder_block(config, hidden_states, batch_size):
     block = SpatialTemporalEncoderBlock(config)
-    encout = block(hidden_states=hidden_states, return_attentions=False)
-    
+    encout = block(hidden_states=hidden_states, return_attention=False)
     assert tuple(encout.shape) == (batch_size, config.channels, config.context_length, config.embed_dim)
+
+def test_encoder(config, input_sequences, batch_size):
+    encoder = SpatialTemporalEncoder(config)
+    hidden_states = encoder(input_sequences, return_attention=False)
+    assert tuple(hidden_states.shape) == (batch_size, config.channels, config.context_length, config.embed_dim)

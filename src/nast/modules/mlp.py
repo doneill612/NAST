@@ -7,7 +7,14 @@ from torch import FloatTensor
 
 class FeedForwardBlock(nn.Module):
 
-    def __init__(self, embed_dim: int, expansion_factor: int, ff_dropout: float=0.0, bias: bool=False):
+    def __init__(
+        self, 
+        embed_dim: int, 
+        expansion_factor: int, 
+        *,
+        ff_dropout: float=0.0, 
+        bias: bool=False
+    ):
         super(FeedForwardBlock, self).__init__()
         self.ff_dropout = ff_dropout
         self.expand = nn.Linear(embed_dim, expansion_factor * embed_dim, bias=bias)

@@ -1,29 +1,43 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as functional
 
-from typing import Union, Tuple
+from typing import Union, Tuple, Optional
 from torch import FloatTensor
 
 from .attention import MultiheadAttention, positional_encoding_table
+from .mlp import FeedForwardBlock
 from ..config import NastTransformerConfig
 
-class SptialTemporalEncoder(nn.Module):
+class SpatialTemporalEncoder(nn.Module):
 
     def __init__(self, config: NastTransformerConfig):
         super().__init__()    
         self.config = config
+        self.conv_embedding = nn.Conv1d(config.channels, config.embed_dim, kernel_size=1)
+        self.layernorm = nn.LayerNorm(config.embed_dim)
         self.blocks = nn.ModuleList([SpatialTemporalEncoderBlock(config) for _ in range(config.encoder_blocks)])
 
-    def forward(self, input_sequences: FloatTensor):
-        hidden_states = input_sequences.unsqueeze(1).repeat_interleave(self.config.embed_dim, dim=-1)
-        hidden_states = hidden_states.transpose(1, 2).contiguous()
-        # TODO finish, just a half-baked method at the moment
-        for idx, encoder_block in enumerate(self.blocks):
-            out = encoder_block(
+    def forward(
+        self, 
+        input_sequences: FloatTensor, 
+        return_attention: bool=True
+    ):
+        hidden_states = input_sequences.unsqueeze(-1).repeat_interleave(self.config.embed_dim, dim=-1)
+        hidden_states = functional.dropout(hidden_states, p=self.config.encoder_ff_dropout, training=self.training)
+        hidden_states = self.layernorm(hidden_states)
+        enc_self_attentions = []
+        for encoder_block in self.blocks:
+            hidden_states, attn_spt = encoder_block(
                 hidden_states=hidden_states,
-                return_attentions=True
+                return_attention=True
             )
-
+            if return_attention:
+                enc_self_attentions.append(attn_spt)
+        if return_attention:
+            return hidden_states, enc_self_attentions[-1]
+        return hidden_states
+        
 class SpatialTemporalEncoderBlock(nn.Module):
 
     def __init__(self, config: NastTransformerConfig):
@@ -42,11 +56,13 @@ class SpatialTemporalEncoderBlock(nn.Module):
             attn_dropout=config.decoder_attn_dropout,
             ff_dropout=config.encoder_ff_dropout
         )
+        self.mlp = FeedForwardBlock(config.embed_dim, config.encoder_ff_expansion, ff_dropout=config.encoder_ff_dropout)
 
     def forward(
         self, 
         hidden_states: FloatTensor,
-        return_attentions: bool=False
+        key_value_states: Optional[Tuple[FloatTensor, FloatTensor]]=None,
+        return_attention: bool=False,
     ) -> Union[FloatTensor, Tuple[FloatTensor, FloatTensor]]:
         # layernorm
         hidden_states = self.input_layernorm(hidden_states)        
@@ -63,8 +79,12 @@ class SpatialTemporalEncoderBlock(nn.Module):
         reshaped_hidden_states = hidden_states.transpose(1, 2).contiguous()
 
         # calculate temporal and spacial attentions
-        encout, tattn = self.attention(pos_encoded_hidden_states, axis='time')
-        _, sattn = self.attention(reshaped_hidden_states, axis='space')
+        encout, tattn = self.attention(
+            pos_encoded_hidden_states, key_value_states=key_value_states, axis='time'
+        )
+        _, sattn = self.attention(
+            reshaped_hidden_states, key_value_states=key_value_states, axis='space'
+        )
 
         # create "temporal influence map" from temporal attention weights
         # spacial attention weights @ temporal influence map => spatial-temporal attention
@@ -74,10 +94,12 @@ class SpatialTemporalEncoderBlock(nn.Module):
             encout.transpose(1, 2).contiguous()
         )
 
-        if return_attentions:
+        # output shape (batch_size, channels, context_length, embed_dim)
+        encout = self.mlp(encout)
+
+        if return_attention:
             return encout, attn_st
         
-        # output shape (batch_size, channels, context_length, embed_dim)
         return encout
 
 
