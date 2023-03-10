@@ -31,7 +31,7 @@ def input_sequences(config, batch_size):
 
 @pytest.fixture
 def hidden_states(config, batch_size):
-    return torch.zeros((batch_size, config.channels, config.context_length, config.embed_dim))
+    return torch.randn((batch_size, config.channels, config.context_length, config.embed_dim))
 
 @pytest.fixture
 def batch_size():
@@ -58,6 +58,6 @@ def test_positional_encoding_table(config, input_sequences, batch_size):
 
 def test_encoder_block(config, hidden_states, batch_size):
     block = SpatialTemporalEncoderBlock(config)
-    temp, spat = block(hidden_states=hidden_states)
-    assert tuple(temp.shape) == (batch_size, config.context_length, config.channels, config.embed_dim)
-    assert tuple(spat.shape) == (batch_size, config.context_length, config.channels, config.embed_dim)
+    encout = block(hidden_states=hidden_states, return_attentions=False)
+    
+    assert tuple(encout.shape) == (batch_size, config.channels, config.context_length, config.embed_dim)

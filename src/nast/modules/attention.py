@@ -39,16 +39,15 @@ class ScaledDotProductAttention(nn.Module):
         mask: Optional[FloatTensor]=None
     ) -> FloatTensor:
         
-        attn_weight = torch.matmul(queries * self.scale, keys.transpose(2, 3))
+        attn = torch.matmul(queries * self.scale, keys.transpose(2, 3))
         if mask is not None:
-            attn_weight = attn_weight.masked_fill(mask == 0, -1e9)
+            attn = attn.masked_fill(mask == 0, -1e9)
 
-        attn = functional.softmax(attn_weight, dim=-1)
+        attn = functional.softmax(attn, dim=-1)
         attn = functional.dropout(attn, p=self.dropout, training=self.training)
         
         out = torch.matmul(attn, values)
         return out, attn
-
     
 class MultiheadAttention(nn.Module):
 
@@ -78,7 +77,7 @@ class MultiheadAttention(nn.Module):
     def forward(
         self,
         hidden_states: FloatTensor,
-        key_value_states: Optional[Tuple[FloatTensor]]=None,
+        key_value_states: Optional[Tuple[FloatTensor, FloatTensor]]=None,
         attention_mask: Optional[FloatTensor]=None,
         axis: str='time'
     ):
@@ -86,36 +85,55 @@ class MultiheadAttention(nn.Module):
         is_cross_attention = key_value_states is not None
         residual = hidden_states
 
-        # sptial attention, collapse timesteps into batch dimension and attend 
-        # to all timeseries channels
         if axis == 'space':
+            # sptial attention, collapse timesteps into batch dimension and attend 
+            # to each timeseries feature (channel)
             hidden_states = hidden_states.view(-1, channels, embed_dim)
+        else:
+            # temporal attention, transpose channel and time dimensions,
+            # collapse channels into batch dimension and attend to 
+            # each individual timestep
+            hidden_states = hidden_states.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
 
-        queries = self.query_proj(hidden_states)
+        queries: FloatTensor = self.query_proj(hidden_states)
         if is_cross_attention:
             ks, vs = key_value_states
             if axis == 'space':
                 # spatial attention, same as above, attend to channels
                 ks = ks.view(-1, channels, embed_dim)
                 vs = vs.view(-1, channels, embed_dim)
-            keys = self.key_proj(key_value_states[0])
-            values = self.value_proj(key_value_states[1])
+            else:
+                # temporal attention, same as above, attend to timesteps
+                ks = ks.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
+                vs = vs.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
+            keys: FloatTensor = self.key_proj(ks)
+            values: FloatTensor = self.value_proj(vs)
         else:
-            keys = self.key_proj(hidden_states)
-            values = self.value_proj(hidden_states)
+            keys: FloatTensor = self.key_proj(hidden_states)
+            values: FloatTensor = self.value_proj(hidden_states)
         
         # split to each attention head
-        queries = queries.view(-1, self.num_heads, seq_len, self.head_dim)
-        keys = keys.view(-1, self.num_heads, seq_len, self.head_dim)
-        values = values.view(-1, self.num_heads, seq_len, self.head_dim)
+        if axis == 'time':
+            queries = queries.view(-1, self.num_heads, seq_len, self.head_dim)
+            keys = keys.view(-1, self.num_heads, seq_len, self.head_dim)
+            values = values.view(-1, self.num_heads, seq_len, self.head_dim)
+        else:
+            queries = queries.view(-1, self.num_heads, channels, self.head_dim)
+            keys = keys.view(-1, self.num_heads, channels, self.head_dim)
+            values = values.view(-1, self.num_heads, channels, self.head_dim)
 
         if attention_mask is not None:
             attention_mask = attention_mask.unsqueeze(1)
 
         out, attn = self.attn_proj(queries, keys, values, mask=attention_mask)
         
-        # reshape
-        out = out.view(batch_size, seq_len, channels, embed_dim)        
+        # reshape, average attention across heads
+        out = out.view(batch_size, seq_len, channels, embed_dim)
+        if axis == 'space':
+            attn = attn.view(batch_size, seq_len, self.num_heads, channels, channels)
+        else:
+            attn = attn.view(batch_size, channels, self.num_heads, seq_len, seq_len)
+        attn = torch.mean(attn, dim=2)
         
         # fc + residual
         out = self.fc(out)

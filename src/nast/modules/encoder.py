@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from typing import Tuple, Optional
+from typing import Union, Tuple
 from torch import FloatTensor
 
 from .attention import MultiheadAttention, positional_encoding_table
@@ -42,27 +42,42 @@ class SpatialTemporalEncoderBlock(nn.Module):
             attn_dropout=config.decoder_attn_dropout,
             ff_dropout=config.encoder_ff_dropout
         )
-        self.expand = nn.Linear()
 
     def forward(
         self, 
         hidden_states: FloatTensor,
         return_attentions: bool=False
-    ) -> Tuple[FloatTensor]:        
+    ) -> Union[FloatTensor, Tuple[FloatTensor, FloatTensor]]:
+        # layernorm
         hidden_states = self.input_layernorm(hidden_states)        
         
+        # create positional encoded to be used for temporal attention mechanism
         positions = torch.arange(0, self.config.context_length, dtype=torch.long).to(hidden_states.device)
         positional_encoding = self.pos_encode(positions)
         
-        temporal_attention_sequences = (hidden_states + positional_encoding).transpose(1, 2).contiguous()
-        spatial_attention_sequences = hidden_states.transpose(1, 2).contiguous()
+        # add positional encoding to the hidden states for temporal attention 
+        # reshape hidden states + pos encoding for consumption by attention module
+        pos_encoded_hidden_states = (hidden_states + positional_encoding).transpose(1, 2).contiguous()
+        # no positional encoding required for spatial attention
+        # reshape hidden states for consumption by attention module
+        reshaped_hidden_states = hidden_states.transpose(1, 2).contiguous()
 
-        temporal_attention_sequences, temporal_attention = self.attention(temporal_attention_sequences, axis='time')
-        spatial_attention_sequences, spatial_attention = self.attention(spatial_attention_sequences, axis='space')
+        # calculate temporal and spacial attentions
+        encout, tattn = self.attention(pos_encoded_hidden_states, axis='time')
+        _, sattn = self.attention(reshaped_hidden_states, axis='space')
 
-        out = [temporal_attention_sequences, spatial_attention_sequences,]
+        # create "temporal influence map" from temporal attention weights
+        # spacial attention weights @ temporal influence map => spatial-temporal attention
+        attn_st = torch.matmul(sattn, tattn.transpose(1, 2).contiguous())
+        encout = torch.matmul(
+            attn_st.transpose(1, 2).contiguous(),
+            encout.transpose(1, 2).contiguous()
+        )
+
         if return_attentions:
-            out.extend((temporal_attention, spatial_attention))
-        return out
+            return encout, attn_st
+        
+        # output shape (batch_size, channels, context_length, embed_dim)
+        return encout
 
 
