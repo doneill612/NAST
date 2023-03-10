@@ -6,11 +6,7 @@ from torch import FloatTensor
 from torch import nn
 
 from nast.modules.qgb import QueryGenerationBlock
-from nast.modules.attention import (
-    ScaledDotProductAttention, 
-    MultiheadAttention,
-    positional_encoding_table,
-)
+from nast.modules.attention import positional_encoding_table
 from nast.modules.encoder import SpatialTemporalEncoderBlock, SpatialTemporalEncoder
 from nast.config import NastTransformerConfig
 
@@ -69,7 +65,7 @@ def test_encoder(config, input_sequences, batch_size):
 def test_qgb(config, input_sequences, batch_size):
     encoder = SpatialTemporalEncoder(config)
     hidden_states = encoder(input_sequences, return_attention=False)
-    qgb = QueryGenerationBlock(config.channels, config.prediction_length, config.embed_dim)
+    qgb = QueryGenerationBlock(config.prediction_length, config.embed_dim)
     queries, encoder_states = qgb(hidden_states)
     assert tuple(encoder_states.shape) == (batch_size, config.channels, config.context_length, config.embed_dim)
     assert tuple(queries.shape) == (batch_size, config.channels, config.prediction_length, config.embed_dim)

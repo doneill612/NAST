@@ -8,7 +8,8 @@ from torch.nn import functional
 from typing import Optional, Union, Tuple
 
 
-def positional_encoding_table(sequence_length: Union[int, FloatTensor], embed_dim: int) -> FloatTensor: 
+def positional_encoding_table(sequence_length: Union[int, FloatTensor], embed_dim: int) -> FloatTensor:
+    """Traditional sinusoidal positional encoding table proposed in Vaswani et al."""
     if isinstance(sequence_length, int):  
         positions = list(range(sequence_length))
     def cal_angle(position, hid_idx):
@@ -25,7 +26,11 @@ def positional_encoding_table(sequence_length: Union[int, FloatTensor], embed_di
     return torch.FloatTensor(sinusoid_table)
     
 class ScaledDotProductAttention(nn.Module):
-
+    """Scaled dot product attention mechanism.
+    
+    Follows similar implementation to Vaswani et al. Temperature scaling
+    equal to `1 / sqrt(embed_dim)`.
+    """
     def __init__(self, embed_dim: int, dropout: float=0.0):
         super(ScaledDotProductAttention, self).__init__()
         self.scale = embed_dim ** -0.5
@@ -50,7 +55,18 @@ class ScaledDotProductAttention(nn.Module):
         return out, attn
     
 class MultiheadAttention(nn.Module):
+    """Multiheaded attention module adapted to perform both spatial and temporal 
+    scaled dot product attention with multiple attention heads. The attention weights are 
+    mean-scaled along the head dimension after computation.
 
+    There are small additions to the forward pass which reshape the input hidden states 
+    accordingly depending on the attention 'axis,' which can be either 'time' or 'space.'
+    
+    In spatial attention, time steps are consumed into the batch dimension and the attention
+    mechanism is applied across features in the input sequences. In temporal attention (similar 
+    to the canoncial transformer architecture), features are consumed into the batch dimension and
+    the attention mechanism is applied across each timestep.
+    """
     def __init__(
         self, 
         num_heads, 
