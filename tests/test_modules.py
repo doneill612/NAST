@@ -7,7 +7,7 @@ from torch import nn
 
 from nast.modules.qgb import QueryGenerationBlock
 from nast.modules.attention import positional_encoding_table
-from nast.modules.encoder import SpatialTemporalEncoderBlock, SpatialTemporalEncoder
+from nast.modules.encoder import EncoderBlock, Encoder
 from nast.config import NastTransformerConfig
 
 @pytest.fixture
@@ -15,13 +15,14 @@ def config():
     return NastTransformerConfig(
         context_length=15,
         prediction_length=5,
-        num_objects=3
+        num_objects=3,
+        channels=5,
     )
 
 @pytest.fixture
 def input_sequences(config, batch_size):
-    ts = np.zeros(shape=(config.num_objects, config.context_length))
-    ts = FloatTensor(config.num_objects, config.context_length)
+    ts = np.zeros(shape=(config.num_objects, config.context_length, config.channels))
+    ts = FloatTensor(config.num_objects, config.context_length, config.channels)
     ts = FloatTensor(ts)
     return ts.expand(batch_size, *ts.size())
 
@@ -46,24 +47,25 @@ def test_positional_encoding_table(config, input_sequences, batch_size):
     pos_embedding = nn.Embedding.from_pretrained(enc_table, freeze=True)
     pos = torch.arange(0, sequence_length, dtype=torch.long)
     
-    input_sequences = input_sequences.unsqueeze(-1).repeat_interleave(embed_dim, dim=-1)
+    channel_embedding = nn.Linear(config.channels, config.embed_dim)
+    input_sequences = channel_embedding(input_sequences)
     input_sequences = input_sequences + pos_embedding(pos)
     input_sequences = input_sequences.transpose(1, 2).contiguous()
 
     assert tuple(input_sequences.shape) == (batch_size, sequence_length, num_objects, embed_dim)
 
 def test_encoder_block(config, hidden_states, batch_size):
-    block = SpatialTemporalEncoderBlock(config)
+    block = EncoderBlock(config)
     encout = block(hidden_states=hidden_states, return_attention=False)
     assert tuple(encout.shape) == (batch_size, config.num_objects, config.context_length, config.embed_dim)
 
 def test_encoder(config, input_sequences, batch_size):
-    encoder = SpatialTemporalEncoder(config)
+    encoder = Encoder(config)
     hidden_states = encoder(input_sequences, return_attention=False)
     assert tuple(hidden_states.shape) == (batch_size, config.num_objects, config.context_length, config.embed_dim)
 
 def test_qgb(config, input_sequences, batch_size):
-    encoder = SpatialTemporalEncoder(config)
+    encoder = Encoder(config)
     hidden_states = encoder(input_sequences, return_attention=False)
     qgb = QueryGenerationBlock(config.prediction_length, config.embed_dim)
     queries, encoder_states = qgb(hidden_states)

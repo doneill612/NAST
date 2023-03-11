@@ -9,20 +9,21 @@ from .attention import MultiheadAttention, positional_encoding_table
 from .mlp import FeedForwardBlock
 from ..config import NastTransformerConfig
 
-class SpatialTemporalEncoder(nn.Module):
+class Encoder(nn.Module):
 
     def __init__(self, config: NastTransformerConfig):
         super().__init__()    
         self.config = config
+        self.channel_embed = nn.Linear(config.channels, config.embed_dim)
         self.layernorm = nn.LayerNorm(config.embed_dim)
-        self.blocks = nn.ModuleList([SpatialTemporalEncoderBlock(config) for _ in range(config.encoder_blocks)])
+        self.blocks = nn.ModuleList([EncoderBlock(config) for _ in range(config.encoder_blocks)])
 
     def forward(
         self, 
         input_sequences: FloatTensor, 
         return_attention: bool=True
     ):
-        hidden_states = input_sequences.unsqueeze(-1).repeat_interleave(self.config.embed_dim, dim=-1)
+        hidden_states = self.channel_embed(input_sequences)
         hidden_states = functional.dropout(hidden_states, p=self.config.encoder_ff_dropout, training=self.training)
         hidden_states = self.layernorm(hidden_states)
         enc_self_attentions = []
@@ -37,10 +38,10 @@ class SpatialTemporalEncoder(nn.Module):
             return hidden_states, enc_self_attentions[-1]
         return hidden_states
         
-class SpatialTemporalEncoderBlock(nn.Module):
+class EncoderBlock(nn.Module):
 
     def __init__(self, config: NastTransformerConfig):
-        super(SpatialTemporalEncoderBlock, self).__init__()
+        super(EncoderBlock, self).__init__()
         
         self.config = config
     
