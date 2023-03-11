@@ -75,14 +75,14 @@ class SpatialTemporalEncoderBlock(nn.Module):
         pos_encoded_hidden_states = (hidden_states + positional_encoding).transpose(1, 2).contiguous()
         # no positional encoding required for spatial attention
         # reshape hidden states for consumption by attention module
-        reshaped_hidden_states = hidden_states.transpose(1, 2).contiguous()
+        hidden_states = hidden_states.transpose(1, 2).contiguous()
 
         # calculate temporal and spacial attentions
         encout, tattn = self.attention(
             pos_encoded_hidden_states, key_value_states=key_value_states, axis='time'
         )
         _, sattn = self.attention(
-            reshaped_hidden_states, key_value_states=key_value_states, axis='space'
+            hidden_states, key_value_states=key_value_states, axis='space'
         )
 
         # create "temporal influence map" from temporal attention weights
