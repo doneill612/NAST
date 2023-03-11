@@ -49,11 +49,10 @@ class EncoderBlock(nn.Module):
             positional_encoding_table(config.context_length, config.embed_dim),
             freeze=True
         )
-        self.input_layernorm = nn.LayerNorm(config.embed_dim)
         self.attention = MultiheadAttention(
             num_heads=config.encoder_attn_heads,
             embed_dim=config.embed_dim,
-            attn_dropout=config.decoder_attn_dropout,
+            attn_dropout=config.encoder_attn_dropout,
             ff_dropout=config.encoder_ff_dropout
         )
         self.mlp = FeedForwardBlock(config.embed_dim, config.encoder_ff_expansion, ff_dropout=config.encoder_ff_dropout)
@@ -62,11 +61,9 @@ class EncoderBlock(nn.Module):
         self, 
         hidden_states: FloatTensor,
         key_value_states: Optional[Tuple[FloatTensor, FloatTensor]]=None,
+        attention_mask: Optional[FloatTensor]=None,
         return_attention: bool=False,
     ) -> Union[FloatTensor, Tuple[FloatTensor, FloatTensor]]:
-        # layernorm
-        hidden_states = self.input_layernorm(hidden_states)        
-        
         # create positional encoded to be used for temporal attention mechanism
         positions = torch.arange(0, self.config.context_length, dtype=torch.long).to(hidden_states.device)
         positional_encoding = self.pos_encode(positions)
@@ -80,10 +77,16 @@ class EncoderBlock(nn.Module):
 
         # calculate temporal and spacial attentions
         encout, tattn = self.attention(
-            pos_encoded_hidden_states, key_value_states=key_value_states, axis='time'
+            pos_encoded_hidden_states, 
+            key_value_states=key_value_states,
+            attention_mask=attention_mask,
+            axis='time'
         )
         _, sattn = self.attention(
-            hidden_states, key_value_states=key_value_states, axis='space'
+            hidden_states,
+            key_value_states=key_value_states,
+            attention_mask=attention_mask, 
+            axis='space'
         )
 
         # create "temporal influence map" from temporal attention weights
