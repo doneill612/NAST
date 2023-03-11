@@ -42,7 +42,7 @@ class ScaledDotProductAttention(nn.Module):
         keys: FloatTensor, 
         values: FloatTensor, 
         mask: Optional[FloatTensor]=None
-    ) -> FloatTensor:
+    ) -> Tuple[FloatTensor, FloatTensor]:
         
         attn = torch.matmul(queries * self.scale, keys.transpose(2, 3))
         if mask is not None:
@@ -96,7 +96,7 @@ class MultiheadAttention(nn.Module):
         key_value_states: Optional[Tuple[FloatTensor, FloatTensor]]=None,
         attention_mask: Optional[FloatTensor]=None,
         axis: str='time'
-    ):
+    ) -> Tuple[FloatTensor, FloatTensor]:
         batch_size, seq_len, nobj, embed_dim = hidden_states.size()
         is_cross_attention = key_value_states is not None
         residual = hidden_states
