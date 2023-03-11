@@ -67,7 +67,7 @@ def test_encoder(config, input_sequences, batch_size):
 def test_qgb(config, input_sequences, batch_size):
     encoder = Encoder(config)
     hidden_states = encoder(input_sequences, return_attention=False)
-    qgb = QueryGenerationBlock(config.prediction_length, config.embed_dim)
+    qgb = QueryGenerationBlock(config)
     queries, encoder_states = qgb(hidden_states)
     assert tuple(encoder_states.shape) == (batch_size, config.num_objects, config.context_length, config.embed_dim)
     assert tuple(queries.shape) == (batch_size, config.num_objects, config.prediction_length, config.embed_dim)

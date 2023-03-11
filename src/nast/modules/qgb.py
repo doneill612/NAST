@@ -1,11 +1,10 @@
-import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as functional
 
 from torch import FloatTensor
 
 from .attention import positional_encoding_table
+from ..config import NastTransformerConfig
 
 
 class QueryGenerationBlock(nn.Module):
@@ -25,7 +24,7 @@ class QueryGenerationBlock(nn.Module):
     influence `I` and generate queries of shape `(b c tf, e)` by performing
     `torch.matmul(I.mT, encoder_outputs)`.
     """
-    def __init__(self, prediction_length: int, embed_dim: int, bias: bool=True):
+    def __init__(self, config: NastTransformerConfig, bias: bool=True):
         """Constructs a new query generation block.
 
         Args
@@ -41,20 +40,20 @@ class QueryGenerationBlock(nn.Module):
                 Whether or not to use bias on the linear projection layers
         """
         super(QueryGenerationBlock, self).__init__()
-        self.prediction_length = prediction_length
+        self.config = config
         self.pos_embed = nn.Embedding.from_pretrained(
-            positional_encoding_table(prediction_length, embed_dim),
+            positional_encoding_table(config.prediction_length, config.embed_dim),
             freeze=True
         )
-        self.history_proj = nn.Linear(embed_dim, 1, bias=bias)
-        self.pos_proj = nn.Linear(embed_dim, 1, bias=bias)
+        self.history_proj = nn.Linear(config.embed_dim, 1, bias=bias)
+        self.pos_proj = nn.Linear(config.embed_dim, 1, bias=bias)
         
     def forward(self, encoder_outputs: FloatTensor, return_encoder_outputs: bool=True) -> FloatTensor:
         # shape(encoder_outputs) = (batch_size, channels, seq_len, embed_dim)
         history_scores = self.history_proj(encoder_outputs)
         history_scores = torch.relu(history_scores)
         
-        positions = torch.arange(0, self.prediction_length, dtype=torch.long).to(encoder_outputs.device)
+        positions = torch.arange(0, self.config.prediction_length, dtype=torch.long).to(encoder_outputs.device)
         position_encoding = self.pos_embed(positions)
         position_scores = self.pos_proj(position_encoding).transpose(0, 1).contiguous()
         position_scores = torch.relu(position_scores)
