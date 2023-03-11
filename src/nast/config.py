@@ -5,7 +5,7 @@ class NastTransformerConfig:
 
     context_length: int
     prediction_length: int
-    channels: int
+    num_objects: int
 
     encoder_blocks: int = 2
     decoder_blocks: int = 2

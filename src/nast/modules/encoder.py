@@ -93,7 +93,7 @@ class SpatialTemporalEncoderBlock(nn.Module):
             encout.transpose(1, 2).contiguous()
         )
 
-        # output shape (batch_size, channels, context_length, embed_dim)
+        # output shape (batch_size, nobj, context_length, embed_dim)
         encout = self.mlp(encout)
 
         if return_attention:

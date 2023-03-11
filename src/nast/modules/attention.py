@@ -63,8 +63,8 @@ class MultiheadAttention(nn.Module):
     accordingly depending on the attention 'axis,' which can be either 'time' or 'space.'
     
     In spatial attention, time steps are consumed into the batch dimension and the attention
-    mechanism is applied across features in the input sequences. In temporal attention (similar 
-    to the canoncial transformer architecture), features are consumed into the batch dimension and
+    mechanism is applied across object dimensions in the input sequences. In temporal attention (similar 
+    to the canoncial transformer architecture), object dimensions are consumed into the batch dimension and
     the attention mechanism is applied across each timestep.
     """
     def __init__(
@@ -97,17 +97,17 @@ class MultiheadAttention(nn.Module):
         attention_mask: Optional[FloatTensor]=None,
         axis: str='time'
     ):
-        batch_size, seq_len, channels, embed_dim = hidden_states.size()
+        batch_size, seq_len, nobj, embed_dim = hidden_states.size()
         is_cross_attention = key_value_states is not None
         residual = hidden_states
 
         if axis == 'space':
             # sptial attention, collapse timesteps into batch dimension and attend 
-            # to each timeseries feature (channel)
-            hidden_states = hidden_states.view(-1, channels, embed_dim)
+            # to object features
+            hidden_states = hidden_states.view(-1, nobj, embed_dim)
         else:
-            # temporal attention, transpose channel and time dimensions,
-            # collapse channels into batch dimension and attend to 
+            # temporal attention, transpose object and time dimensions,
+            # collapse objects into batch dimension and attend to 
             # each individual timestep
             hidden_states = hidden_states.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
 
@@ -115,9 +115,9 @@ class MultiheadAttention(nn.Module):
         if is_cross_attention:
             ks, vs = key_value_states
             if axis == 'space':
-                # spatial attention, same as above, attend to channels
-                ks = ks.view(-1, channels, embed_dim)
-                vs = vs.view(-1, channels, embed_dim)
+                # spatial attention, same as above, attend to object features
+                ks = ks.view(-1, nobj, embed_dim)
+                vs = vs.view(-1, nobj, embed_dim)
             else:
                 # temporal attention, same as above, attend to timesteps
                 ks = ks.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
@@ -134,9 +134,9 @@ class MultiheadAttention(nn.Module):
             keys = keys.view(-1, self.num_heads, seq_len, self.head_dim)
             values = values.view(-1, self.num_heads, seq_len, self.head_dim)
         else:
-            queries = queries.view(-1, self.num_heads, channels, self.head_dim)
-            keys = keys.view(-1, self.num_heads, channels, self.head_dim)
-            values = values.view(-1, self.num_heads, channels, self.head_dim)
+            queries = queries.view(-1, self.num_heads, nobj, self.head_dim)
+            keys = keys.view(-1, self.num_heads, nobj, self.head_dim)
+            values = values.view(-1, self.num_heads, nobj, self.head_dim)
 
         if attention_mask is not None:
             attention_mask = attention_mask.unsqueeze(1)
@@ -144,11 +144,11 @@ class MultiheadAttention(nn.Module):
         out, attn = self.attn_proj(queries, keys, values, mask=attention_mask)
         
         # reshape, average attention across heads
-        out = out.view(batch_size, seq_len, channels, embed_dim)
+        out = out.view(batch_size, seq_len, nobj, embed_dim)
         if axis == 'space':
-            attn = attn.view(batch_size, seq_len, self.num_heads, channels, channels)
+            attn = attn.view(batch_size, seq_len, self.num_heads, nobj, nobj)
         else:
-            attn = attn.view(batch_size, channels, self.num_heads, seq_len, seq_len)
+            attn = attn.view(batch_size, nobj, self.num_heads, seq_len, seq_len)
         attn = torch.mean(attn, dim=2)
         
         # fc + residual
