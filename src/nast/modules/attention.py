@@ -43,7 +43,6 @@ class ScaledDotProductAttention(nn.Module):
         values: FloatTensor, 
         mask: Optional[FloatTensor]=None
     ) -> Tuple[FloatTensor, FloatTensor]:
-        
         attn = torch.matmul(queries * self.scale, keys.transpose(2, 3))
         if mask is not None:
             attn = attn.masked_fill(mask == 0, -1e9)
@@ -93,7 +92,7 @@ class MultiheadAttention(nn.Module):
     def forward(
         self,
         hidden_states: FloatTensor,
-        key_value_states: Optional[Tuple[FloatTensor, FloatTensor]]=None,
+        key_value_states: Optional[FloatTensor]=None,
         attention_mask: Optional[FloatTensor]=None,
         axis: str='time'
     ) -> Tuple[FloatTensor, FloatTensor]:
@@ -113,17 +112,15 @@ class MultiheadAttention(nn.Module):
 
         queries: FloatTensor = self.query_proj(hidden_states)
         if is_cross_attention:
-            ks, vs = key_value_states
+            kv_len = key_value_states.size(1)
             if axis == 'space':
                 # spatial attention, same as above, attend to object features
-                ks = ks.view(-1, nobj, embed_dim)
-                vs = vs.view(-1, nobj, embed_dim)
+                key_value_states = key_value_states.view(-1, nobj, embed_dim)
             else:
                 # temporal attention, same as above, attend to timesteps
-                ks = ks.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
-                vs = vs.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
-            keys: FloatTensor = self.key_proj(ks)
-            values: FloatTensor = self.value_proj(vs)
+                key_value_states = key_value_states.transpose(1, 2).contiguous().view(-1, kv_len, embed_dim) 
+            keys: FloatTensor = self.key_proj(key_value_states)
+            values: FloatTensor = self.value_proj(key_value_states)
         else:
             keys: FloatTensor = self.key_proj(hidden_states)
             values: FloatTensor = self.value_proj(hidden_states)
@@ -131,8 +128,12 @@ class MultiheadAttention(nn.Module):
         # split to each attention head
         if axis == 'time':
             queries = queries.view(-1, self.num_heads, seq_len, self.head_dim)
-            keys = keys.view(-1, self.num_heads, seq_len, self.head_dim)
-            values = values.view(-1, self.num_heads, seq_len, self.head_dim)
+            if is_cross_attention:
+                keys = keys.view(-1, self.num_heads, kv_len, self.head_dim)
+                values = values.view(-1, self.num_heads, kv_len, self.head_dim)
+            else:
+                keys = keys.view(-1, self.num_heads, seq_len, self.head_dim)
+                values = values.view(-1, self.num_heads, seq_len, self.head_dim)
         else:
             queries = queries.view(-1, self.num_heads, nobj, self.head_dim)
             keys = keys.view(-1, self.num_heads, nobj, self.head_dim)
@@ -147,8 +148,8 @@ class MultiheadAttention(nn.Module):
         out = out.view(batch_size, seq_len, nobj, embed_dim)
         if axis == 'space':
             attn = attn.view(batch_size, seq_len, self.num_heads, nobj, nobj)
-        else:
-            attn = attn.view(batch_size, nobj, self.num_heads, seq_len, seq_len)
+        else:                
+            attn = attn.view(batch_size, nobj, self.num_heads, kv_len if is_cross_attention else seq_len, seq_len)
         attn = torch.mean(attn, dim=2)
         
         # fc + residual

@@ -60,24 +60,28 @@ class DecoderBlock(nn.Module):
             attn_dropout=config.decoder_attn_dropout,
             ff_dropout=config.decoder_ff_dropout
         )
-        self.mlp_st_block = FeedForwardBlock(config.embed_dim, config.encoder_ff_expansion, ff_dropout=config.encoder_ff_dropout)
-        self.mlp_ca_block = FeedForwardBlock(config.embed_dim, config.encoder_ff_expansion, ff_dropout=config.encoder_ff_dropout)
+        self.mlp_st_block = FeedForwardBlock(config.embed_dim, config.decoder_ff_expansion, ff_dropout=config.decoder_ff_dropout)
+        self.mlp_ca_block = FeedForwardBlock(config.embed_dim, config.decoder_ff_expansion, ff_dropout=config.decoder_ff_dropout)
 
     def forward(
         self,
         hidden_states: FloatTensor,
-        key_value_states: Tuple[FloatTensor, FloatTensor],
+        key_value_states: FloatTensor,
         attention_mask: Optional[FloatTensor]=None,
         return_attention: bool=False
     ):
         # create positional encoded to be used for temporal attention mechanism
-        positions = torch.arange(0, self.config.context_length, dtype=torch.long).to(hidden_states.device)
+        positions = torch.arange(0, self.config.prediction_length, dtype=torch.long).to(hidden_states.device)
         positional_encoding = self.pos_encode(positions)
         
         # add positional encoding to the hidden states for temporal attention 
         # reshape hidden states + pos encoding for consumption by attention module
         # no positional encoding required for spatial attention
-        pos_encoded_hidden_states = hidden_states.transpose(1, 2).contiguous() + positional_encoding
+        
+        pos_encoded_hidden_states = (hidden_states + positional_encoding).transpose(1, 2).contiguous()
+
+        if key_value_states is not None:
+            key_value_states = key_value_states.transpose(1, 2).contiguous()
 
         # calculate temporal and spacial attentions
         decout, tattn = self.self_attention(
@@ -95,20 +99,24 @@ class DecoderBlock(nn.Module):
 
         # create "temporal influence map" from temporal attention weights
         # spacial attention weights @ temporal influence map => spatial-temporal attention
-        attn_st = torch.matmul(sattn, tattn.transpose(1, 2).contiguous())
+        attn_st = torch.matmul(sattn, tattn)
+        # assert False, (attn_st.shape, decout.shape)
         decout = torch.matmul(
-            attn_st.transpose(1, 2).contiguous(),
+            attn_st,
             decout.transpose(1, 2).contiguous()
         )
 
         decout = self.mlp_st_block(decout)
+        # assert False, (decout.transpose(1, 2).contiguous().shape, key_value_states.shape)
 
         decout, cross_attn = self.cross_attention(
-            decout,
+            decout.transpose(1, 2).contiguous(),
             key_value_states=key_value_states,
             attention_mask=attention_mask,
             axis='time'
         )
+
+        decout = decout.transpose(1, 2).contiguous()
 
         # output shape (batch_size, nobj, prediction_length, embed_dim)
         decout = self.mlp_ca_block(decout)

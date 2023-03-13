@@ -60,7 +60,7 @@ class EncoderBlock(nn.Module):
     def forward(
         self, 
         hidden_states: FloatTensor,
-        key_value_states: Optional[Tuple[FloatTensor, FloatTensor]]=None,
+        key_value_states: Optional[FloatTensor]=None,
         attention_mask: Optional[FloatTensor]=None,
         return_attention: bool=False,
     ) -> Union[FloatTensor, Tuple[FloatTensor, FloatTensor]]:
@@ -74,6 +74,9 @@ class EncoderBlock(nn.Module):
         # no positional encoding required for spatial attention
         # reshape hidden states for consumption by attention module
         hidden_states = hidden_states.transpose(1, 2).contiguous()
+
+        if key_value_states:
+            key_value_states = key_value_states.transpose(1, 2).contiguous()
 
         # calculate temporal and spacial attentions
         encout, tattn = self.attention(
