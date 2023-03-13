@@ -60,8 +60,7 @@ class DecoderBlock(nn.Module):
             attn_dropout=config.decoder_attn_dropout,
             ff_dropout=config.decoder_ff_dropout
         )
-        self.mlp_st_block = FeedForwardBlock(config.embed_dim, config.decoder_ff_expansion, ff_dropout=config.decoder_ff_dropout)
-        self.mlp_ca_block = FeedForwardBlock(config.embed_dim, config.decoder_ff_expansion, ff_dropout=config.decoder_ff_dropout)
+        self.mlp = FeedForwardBlock(config.embed_dim, config.decoder_ff_expansion, ff_dropout=config.decoder_ff_dropout)
 
     def forward(
         self,
@@ -106,9 +105,6 @@ class DecoderBlock(nn.Module):
             decout.transpose(1, 2).contiguous()
         )
 
-        decout = self.mlp_st_block(decout)
-        # assert False, (decout.transpose(1, 2).contiguous().shape, key_value_states.shape)
-
         decout, cross_attn = self.cross_attention(
             decout.transpose(1, 2).contiguous(),
             key_value_states=key_value_states,
@@ -119,7 +115,7 @@ class DecoderBlock(nn.Module):
         decout = decout.transpose(1, 2).contiguous()
 
         # output shape (batch_size, nobj, prediction_length, embed_dim)
-        decout = self.mlp_ca_block(decout)
+        decout = self.mlp(decout)
 
         if return_attention:
             return decout, attn_st, cross_attn
