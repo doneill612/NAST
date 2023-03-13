@@ -11,6 +11,8 @@ from nast.modules.encoder import EncoderBlock, Encoder
 from nast.modules.decoder import DecoderBlock, Decoder
 from nast.config import NastTransformerConfig
 
+from nast.model import NastTransformerBase
+
 @pytest.fixture
 def config():
     return NastTransformerConfig(
@@ -89,4 +91,9 @@ def test_decoder(config, input_sequences, batch_size):
     queries, encoder_states = qgb(hidden_states)
     decoder = Decoder(config)
     hidden_states = decoder(queries, encoder_states)
+    assert tuple(hidden_states.shape) == (batch_size, config.num_objects, config.prediction_length, config.embed_dim)
+
+def test_transformer_base(config, input_sequences, batch_size):
+    model = NastTransformerBase(config)
+    hidden_states = model(input_sequences)
     assert tuple(hidden_states.shape) == (batch_size, config.num_objects, config.prediction_length, config.embed_dim)
