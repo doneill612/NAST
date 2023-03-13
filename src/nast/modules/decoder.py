@@ -45,7 +45,7 @@ class DecoderBlock(nn.Module):
         self.config = config
 
         self.pos_encode = nn.Embedding.from_pretrained(
-            positional_encoding_table(config.context_length, config.embed_dim),
+            positional_encoding_table(config.prediction_length, config.embed_dim),
             freeze=True
         )
         self.self_attention = MultiheadAttention(
