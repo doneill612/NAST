@@ -1,17 +1,19 @@
+from typing import Optional, Tuple, Union
+
 import numpy as np
 import torch
 import torch.nn as nn
-
 from torch import FloatTensor
 from torch.nn import functional
 
-from typing import Optional, Union, Tuple
 
-
-def positional_encoding_table(sequence_length: Union[int, FloatTensor], embed_dim: int) -> FloatTensor:
+def positional_encoding_table(
+    sequence_length: Union[int, FloatTensor], embed_dim: int
+) -> FloatTensor:
     """Traditional sinusoidal positional encoding table proposed in Vaswani et al."""
-    if isinstance(sequence_length, int):  
+    if isinstance(sequence_length, int):
         positions = list(range(sequence_length))
+
     def cal_angle(position, hid_idx):
         return position / np.power(1000.0, 2 * (hid_idx // 2) / embed_dim)
 
@@ -24,24 +26,26 @@ def positional_encoding_table(sequence_length: Union[int, FloatTensor], embed_di
     sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
 
     return torch.FloatTensor(sinusoid_table)
-    
+
+
 class ScaledDotProductAttention(nn.Module):
     """Scaled dot product attention mechanism.
-    
+
     Follows similar implementation to Vaswani et al. Temperature scaling
     equal to `1 / sqrt(embed_dim)`.
     """
-    def __init__(self, embed_dim: int, dropout: float=0.0):
+
+    def __init__(self, embed_dim: int, dropout: float = 0.0):
         super(ScaledDotProductAttention, self).__init__()
-        self.scale = embed_dim ** -0.5
+        self.scale = embed_dim**-0.5
         self.dropout = dropout
 
     def forward(
-        self, 
-        queries: FloatTensor, 
-        keys: FloatTensor, 
-        values: FloatTensor, 
-        mask: Optional[FloatTensor]=None
+        self,
+        queries: FloatTensor,
+        keys: FloatTensor,
+        values: FloatTensor,
+        mask: Optional[FloatTensor] = None,
     ) -> Tuple[FloatTensor, FloatTensor]:
         attn = torch.matmul(queries * self.scale, keys.transpose(2, 3))
         if mask is not None:
@@ -49,30 +53,32 @@ class ScaledDotProductAttention(nn.Module):
 
         attn = functional.softmax(attn, dim=-1)
         attn = functional.dropout(attn, p=self.dropout, training=self.training)
-        
+
         out = torch.matmul(attn, values)
         return out, attn
-    
+
+
 class MultiheadAttention(nn.Module):
-    """Multiheaded attention module adapted to perform both spatial and temporal 
-    scaled dot product attention with multiple attention heads. The attention weights are 
+    """Multiheaded attention module adapted to perform both spatial and temporal
+    scaled dot product attention with multiple attention heads. The attention weights are
     mean-scaled along the head dimension after computation.
 
-    There are small additions to the forward pass which reshape the input hidden states 
+    There are small additions to the forward pass which reshape the input hidden states
     accordingly depending on the attention 'axis,' which can be either 'time' or 'space.'
-    
+
     In spatial attention, time steps are consumed into the batch dimension and the attention
-    mechanism is applied across object dimensions in the input sequences. In temporal attention (similar 
+    mechanism is applied across object dimensions in the input sequences. In temporal attention (similar
     to the canoncial transformer architecture), object dimensions are consumed into the batch dimension and
     the attention mechanism is applied across each timestep.
     """
+
     def __init__(
-        self, 
-        num_heads, 
-        embed_dim, 
-        attn_dropout=0.0, 
-        ff_dropout=0.0,
-        bias=True
+        self,
+        num_heads: int,
+        embed_dim: int,
+        attn_dropout: float = 0.0,
+        ff_dropout: float = 0.0,
+        bias: bool = True,
     ):
         super(MultiheadAttention, self).__init__()
         self.num_heads = num_heads
@@ -80,7 +86,7 @@ class MultiheadAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.attn_dropout = attn_dropout
         self.ff_dropout = ff_dropout
-        
+
         self.query_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.key_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.value_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
@@ -92,41 +98,47 @@ class MultiheadAttention(nn.Module):
     def forward(
         self,
         hidden_states: FloatTensor,
-        key_value_states: Optional[FloatTensor]=None,
-        attention_mask: Optional[FloatTensor]=None,
-        axis: str='time'
+        key_value_states: Optional[FloatTensor] = None,
+        attention_mask: Optional[FloatTensor] = None,
+        axis: str = "time",
     ) -> Tuple[FloatTensor, FloatTensor]:
         batch_size, seq_len, nobj, embed_dim = hidden_states.size()
         is_cross_attention = key_value_states is not None
         residual = hidden_states
 
-        if axis == 'space':
-            # sptial attention, collapse timesteps into batch dimension and attend 
+        if axis == "space":
+            # sptial attention, collapse timesteps into batch dimension and attend
             # to object features
             hidden_states = hidden_states.view(-1, nobj, embed_dim)
         else:
             # temporal attention, transpose object and time dimensions,
-            # collapse objects into batch dimension and attend to 
+            # collapse objects into batch dimension and attend to
             # each individual timestep
-            hidden_states = hidden_states.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
+            hidden_states = (
+                hidden_states.transpose(1, 2).contiguous().view(-1, seq_len, embed_dim)
+            )
 
         queries: FloatTensor = self.query_proj(hidden_states)
         if is_cross_attention:
             kv_len = key_value_states.size(1)
-            if axis == 'space':
+            if axis == "space":
                 # spatial attention, same as above, attend to object features
                 key_value_states = key_value_states.view(-1, nobj, embed_dim)
             else:
                 # temporal attention, same as above, attend to timesteps
-                key_value_states = key_value_states.transpose(1, 2).contiguous().view(-1, kv_len, embed_dim) 
+                key_value_states = (
+                    key_value_states.transpose(1, 2)
+                    .contiguous()
+                    .view(-1, kv_len, embed_dim)
+                )
             keys: FloatTensor = self.key_proj(key_value_states)
             values: FloatTensor = self.value_proj(key_value_states)
         else:
             keys: FloatTensor = self.key_proj(hidden_states)
             values: FloatTensor = self.value_proj(hidden_states)
-        
+
         # split to each attention head
-        if axis == 'time':
+        if axis == "time":
             queries = queries.view(-1, self.num_heads, seq_len, self.head_dim)
             if is_cross_attention:
                 keys = keys.view(-1, self.num_heads, kv_len, self.head_dim)
@@ -143,15 +155,21 @@ class MultiheadAttention(nn.Module):
             attention_mask = attention_mask.unsqueeze(1)
 
         out, attn = self.attn_proj(queries, keys, values, mask=attention_mask)
-        
+
         # reshape, average attention across heads
         out = out.view(batch_size, seq_len, nobj, embed_dim)
-        if axis == 'space':
+        if axis == "space":
             attn = attn.view(batch_size, seq_len, self.num_heads, nobj, nobj)
-        else:                
-            attn = attn.view(batch_size, nobj, self.num_heads, kv_len if is_cross_attention else seq_len, seq_len)
+        else:
+            attn = attn.view(
+                batch_size,
+                nobj,
+                self.num_heads,
+                kv_len if is_cross_attention else seq_len,
+                seq_len,
+            )
         attn = torch.mean(attn, dim=2)
-        
+
         # fc + residual
         out = self.fc(out)
         out = functional.dropout(out, p=self.ff_dropout, training=self.training)
