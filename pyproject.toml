@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nast"
+version = "0.1"
+description = "Non-Autoregressive Spatial-Temporal Transformer for Time Series forecasting"
+authors = [
+    {name = "David O'Neill", email = "doneill612@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "torch",
+    "datasets",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pre-commit",
+    "black",
+    "isort",
+    "autoflake",
+]
+all = [
+    "nast[dev]"
+]
+
+[tool.hatchling.build.targets.wheel]
+packages = ["src/nast"]
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]
+preview = true
+
+[tool.isort]
+profile = "black"
+line_length = 88
